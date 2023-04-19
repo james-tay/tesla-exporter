@@ -39,3 +39,24 @@ metrics every `cfg_check_interval` seconds.
 when it expires and will update both `token.access` and `token.refresh` in
 the process.
 
+More than 200x metrics are typically exposed by the exporter. This may change
+as Tesla pushes newer versions of their software into the car. The raw data
+can be inspected via,
+
+```
+$ jq . < vehicle.data
+{
+  "response": {
+    "id": 1234567890,
+    "user_id": 1234567890,
+    ...
+    "charge_state": {
+      "battery_heater_on": false,
+      "battery_level": 70,
+      "battery_range": 247.19,
+      ...
+    }
+    ...
+  }
+}
+```
