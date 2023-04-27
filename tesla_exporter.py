@@ -68,7 +68,7 @@ import pprint
 
 cfg_port = 9100         # the port our webserver listens on
 cfg_stale_thres = 90    # treat metrics as stale if older than this (secs)
-cfg_check_interval = 50 # how often we'll try check for new metrics
+cfg_check_interval = 45 # how often we'll try check for new metrics
 cfg_api_retries = 3     # how many times we call tesla APIs before giving up
 cfg_retry_sleep = 5     # pause this number of seconds between retries
 
@@ -79,7 +79,7 @@ cfg_tesla_auth_url = "https://auth.tesla.com"
 cfg_metrics_prefix="tesla"
 
 # If the car goes asleep (or offline), how long (secs) before we wake it.
-cfg_sleep_allowed = 50 * 60
+cfg_sleep_allowed = 60 * 60
 
 # The file which contains the access token (periodically refreshed)
 cfg_access_token_file = "/data/token.access"
@@ -298,13 +298,15 @@ def f_get_vehicle_id():
           (obj["response"] is not None) and
           (len(obj["response"]) == 1) and
           ("id" in obj["response"][0]) and
-          ("state" in obj["response"][0])):
+          ("state" in obj["response"][0]) and
+          (obj["response"][0]["state"] is not None)):
         x = {}
         x["id"] = obj["response"][0]["id"]
         x["state"] = obj["response"][0]["state"]
         print("NOTICE: found vehicle id %d (%s)" % (x["id"], x["state"]))
         return(x)
     time.sleep(cfg_retry_sleep)
+  return(None)
 
 # This function is supplied a vehicle ID. Our job is to send the wake request.
 # We return immediately. The response we get is typically,
@@ -426,7 +428,7 @@ class c_webserver(http.server.BaseHTTPRequestHandler):
   # This function is called whenever a client performs an HTTP GET.
 
   def do_GET(self):
-    print("DEBUG: do_GET() path:%s" % self.path)
+    print("NOTICE: do_GET() path:%s" % self.path)
 
     # if we're not called with "/metrics", just return a 404.
 
@@ -446,6 +448,7 @@ class c_webserver(http.server.BaseHTTPRequestHandler):
       for m in G_metrics_cur.keys():
         buf += "%s %s\n" % (m, G_metrics_cur[m])
     self.wfile.write(str.encode(buf))
+    sys.stdout.flush()
 
 def f_webserver():
   ws = http.server.HTTPServer(("0.0.0.0", cfg_port), c_webserver)
@@ -533,5 +536,8 @@ while 1:
   if (duration > 0):
     print("NOTICE: cycle ended at %.3f, sleeping for %.3f secs." %
           (tv_end, duration))
+    sys.stdout.flush()
     time.sleep(duration)
+  else:
+    sys.stdout.flush()
 
