@@ -52,6 +52,10 @@
 #      - target_label: instance
 #        replacement: slowpoke
 #
+# This web service responds to the "/metrics" endpoint (prometheus's scraping
+# default), as well as "/healthz" to indicate normal operation (ie, HTTP 200)
+# or a fault condition (ie, HTTP 500).
+#
 # References
 #
 #   - https://docs.python.org/3/library/urllib.request.html
@@ -93,6 +97,7 @@ cfg_vehicle_data_file = "/data/vehicle.data"
 G_metrics_cur = None    # metrics we expose on our web server
 G_metrics_new = None    # metrics we accumulate while iterating through JSON
 G_last_load = 0         # epoch time that we last loaded fresh JSON data
+G_last_loop = 0         # epoch time of last main loop (to detect thread death)
 G_last_online = 0       # timestamp of when the car was last online
 
 # -----------------------------------------------------------------------------
@@ -199,6 +204,7 @@ def f_save_data(filename, data):
     e = sys.exc_info()
     print("FATAL: Cannot open %s.new for writing - %s" % (filename, e[1]))
     os._exit(1)
+
   fd.write("%s\n" % data)
   fd.close()
   os.rename("%s.new" % filename, filename)
@@ -233,6 +239,7 @@ def f_update_access_token():
   except:
     e = sys.exc_info()
     print("NOTICE: %s failed - %s" % (url, e[1]))
+    resp = None
 
   if (resp is not None):                # new access token should be here
     payload = resp.read()
@@ -266,10 +273,14 @@ def f_get_vehicle_id():
   retries = cfg_api_retries
   while (retries > 0):
 
+    access_token = f_get_token(cfg_access_token_file)
+    if (access_token is None):
+      return(None)
+
     retries = retries - 1
     hdrs = {}
     hdrs["Content-Type"] = "application/json"
-    hdrs["Authorization"] = "Bearer %s" % f_get_token(cfg_access_token_file)
+    hdrs["Authorization"] = "Bearer %s" % access_token
     url = "%s/api/1/vehicles" % cfg_tesla_owner_url
 
     print("NOTICE: Listing vehicles - %s" % url)
@@ -430,6 +441,21 @@ class c_webserver(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
     print("NOTICE: do_GET() path:%s" % self.path)
 
+    # if we're called with "/healthz", check if main thread is alive.
+
+    if (self.path == "/healthz"):
+      last_loop = time.time() - G_last_loop
+      if (last_loop > cfg_check_interval * 2):  # something's wrong
+        self.send_response(500)
+        self.end_headers()
+        msg = "ERR last_loop:%d secs ago\n" % last_loop
+      else:
+        self.send_response(200)
+        self.end_headers()
+        msg = "OK last_loop:%d secs ago\n" % last_loop
+      self.wfile.write(str.encode(msg))
+      return
+
     # if we're not called with "/metrics", just return a 404.
 
     if (self.path != "/metrics"):
@@ -451,12 +477,13 @@ class c_webserver(http.server.BaseHTTPRequestHandler):
     sys.stdout.flush()
 
 def f_webserver():
-  ws = http.server.HTTPServer(("0.0.0.0", cfg_port), c_webserver)
   try:
+    ws = http.server.HTTPServer(("0.0.0.0", cfg_port), c_webserver)
     ws.serve_forever()
   except:
     e = sys.exc_info()
-    print("FATAL! serve_forever() exited - %s" % e[1])
+    print("FATAL! Cannot setup webservice - %s" % e[1])
+    os._exit(1)
 
 # -----------------------------------------------------------------------------
 
@@ -479,6 +506,7 @@ cycle_start = time.time()
 while 1:
 
   now = time.time()
+  G_last_loop = now
 
   # Get vehicle ID, because this call tells you if the car is online
 
@@ -494,10 +522,11 @@ while 1:
     # if the vehicle is not online, and it's been quite a while, wake it.
 
     offline_duration = now - G_last_online
-    print("NOTICE: vehicle %s for %d/%d secs" % \
-          (vehicle["state"], offline_duration, cfg_sleep_allowed))
-    if (offline_duration > cfg_sleep_allowed):
-      f_wake_vehicle(vehicle["id"])
+    if (vehicle is not None) and ("state" in vehicle) and ("id" in vehicle):
+      print("NOTICE: vehicle %s for %d/%d secs" % \
+            (vehicle["state"], offline_duration, cfg_sleep_allowed))
+      if (offline_duration > cfg_sleep_allowed):
+        f_wake_vehicle(vehicle["id"])
 
   # Check if vehicle JSON file is new
 
