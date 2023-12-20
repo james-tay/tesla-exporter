@@ -619,7 +619,9 @@ while 1:
     f_get_powerwall_data(G_powerwall_id)
 
     # temporarily use f_iterate() to populate "G_metrics_new" and then
-    # merge its values into "G_powerwall_metrics".
+    # merge its values into "G_powerwall_metrics". Note that we don't add
+    # metrics with the name "timestamp" since this is always changing and
+    # will make our database cardinality go crazy.
 
     pwall = f_load_json(cfg_powerwall_data_file)
     if ((pwall is not None) and
@@ -628,7 +630,8 @@ while 1:
       G_metrics_new = {}
       f_iterate(pwall["response"], cfg_powerwall_prefix)
       for k in G_metrics_new.keys():
-        G_powerwall_metrics[k] = G_metrics_new[k]
+        if (k.find("timestamp") < 0):
+          G_powerwall_metrics[k] = G_metrics_new[k]
       print("NOTICE: %d powerwall metrics loaded." % len(G_metrics_new.keys()))
 
   # Get vehicle ID, because this call tells you if the car is online
