@@ -98,6 +98,15 @@ cfg_vehicle_data_file = "/data/vehicle.data"
 # The JSON file where we store vehicle location data
 cfg_vehicle_location_file = "/data/vehicle.location"
 
+# The file which contains our "energy_site_id" number of our Powerwall.
+cfg_powerwall_id_file = "/data/powerwall.id"
+
+# The JSON file where we store Powerwall data
+cfg_powerwall_data_file = "/data/powerwall.data"
+
+# All Powerwall metrics to have this prefix added to them.
+cfg_powerwall_prefix = "teg"
+
 G_metrics_cur = None    # metrics we expose on our web server
 G_metrics_new = None    # metrics we accumulate while iterating through JSON
 G_last_load = 0         # epoch time that we last loaded fresh JSON data
@@ -465,6 +474,38 @@ def f_get_vehicle_location(id):
   if ((obj is not None) and ("response" in obj)):
     f_save_data(cfg_vehicle_location_file, str(payload, "UTF-8"))
 
+# This function should be called AFTER f_get_vehicle_data() as it won't try
+# updating our token or attempt a retry. It saves Powerwall data to a file.
+
+def f_get_powerwall_data(id):
+  hdrs = {}
+  hdrs["Content-Type"] = "application/json"
+  hdrs["Authorization"] = "Bearer %s" % f_get_token(cfg_access_token_file)
+  url = "%s/api/1/energy_sites/%s/live_status" % (cfg_tesla_owner_url, id)
+
+  print("NOTICE: Getting Powerwall data - %s" % url)
+  req = urllib.request.Request(url, data=None, headers=hdrs)
+  resp = None
+  try:
+    resp = urllib.request.urlopen(req)
+  except:
+    e = sys.exc_info()
+    print("WARNING: %s failed - %s" % (url, e[1]))
+  if (resp is None):
+    print("WARNING: %s empty response" % url)
+    return
+
+  payload = resp.read()
+  obj = None
+  try:
+    obj = json.loads(payload)
+  except:
+    e = sys.exc_info()
+    print("WARNING: No JSON response from %s - %s" % (url, e[1]))
+
+  if ((obj is not None) and ("response" in obj)):
+    f_save_data(cfg_powerwall_data_file, str(payload, "UTF-8"))
+
 # -----------------------------------------------------------------------------
 
 class c_webserver(http.server.BaseHTTPRequestHandler):
@@ -505,12 +546,16 @@ class c_webserver(http.server.BaseHTTPRequestHandler):
     self.send_header("Content-type", "text/plain")
     self.end_headers()
 
-    # print out all metrics in G_metrics_cur
+    # print out all metrics in G_metrics_cur and G_powerwall_metrics
 
     buf = ""
     if (G_metrics_cur is not None):
       for m in G_metrics_cur.keys():
         buf += "%s %s\n" % (m, G_metrics_cur[m])
+    if (G_powerwall_id is not None):
+      for m in G_powerwall_metrics.keys():
+        buf += "%s %s\n" % (m, G_powerwall_metrics[m])
+      
     self.wfile.write(str.encode(buf))
     sys.stdout.flush()
 
@@ -524,6 +569,22 @@ def f_webserver():
     os._exit(1)
 
 # -----------------------------------------------------------------------------
+
+# if "cfg_powerwall_id_file" exists, load it now.
+
+G_powerwall_id = None
+G_powerwall_last_poll = 0
+G_powerwall_metrics = {}
+
+fd = None
+try:
+  fd = open(cfg_powerwall_id_file, "r")
+except:
+  e = sys.exc_info()
+if (fd is not None):
+  G_powerwall_id = fd.read().rstrip("\n")
+  print("NOTICE: Using energy_site_id %s." % G_powerwall_id)
+  fd.close()
 
 # start the webserver thread.
 
@@ -549,6 +610,26 @@ while 1:
 
   now = time.time()
   G_last_loop = now
+
+  # See if is time to poll fresh Powerwall metrics
+
+  if ((G_powerwall_id is not None) and
+      (now > G_powerwall_last_poll + cfg_check_interval)):
+    G_powerwall_last_poll = now
+    f_get_powerwall_data(G_powerwall_id)
+
+    # temporarily use f_iterate() to populate "G_metrics_new" and then
+    # merge its values into "G_powerwall_metrics".
+
+    pwall = f_load_json(cfg_powerwall_data_file)
+    if ((pwall is not None) and
+        ("response" in pwall) and
+        (pwall["response"] is not None)):
+      G_metrics_new = {}
+      f_iterate(pwall["response"], cfg_powerwall_prefix)
+      for k in G_metrics_new.keys():
+        G_powerwall_metrics[k] = G_metrics_new[k]
+      print("NOTICE: %d powerwall metrics loaded." % len(G_metrics_new.keys()))
 
   # Get vehicle ID, because this call tells you if the car is online
 
@@ -601,7 +682,7 @@ while 1:
                   "%s_drive_state" % cfg_metrics_prefix)
 
       if (len(G_metrics_new.keys()) > 1):
-        print("NOTICE: %d metrics loaded with age %.3fsecs." % \
+        print("NOTICE: %d vehicle metrics loaded with age %.3fsecs." % \
               (len(G_metrics_new.keys()), time.time() - age))
         G_metrics_cur = G_metrics_new
         G_last_load = age

@@ -60,3 +60,35 @@ $ jq . < vehicle.data
   }
 }
 ```
+
+### Tesla Powerwall
+
+To obtain metrics from a Powerwall, using the same access token, we need to
+look up our "energy_site_id". This can be done via,
+
+```
+curl -s \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $ACCESS_T" \
+    https://owner-api.teslamotors.com/api/1/products
+```
+
+The output from the above curl should include,
+
+```
+{
+  "response": [
+    {
+      "energy_site_id": 1234567890,
+      ...
+    }
+    ...
+  ],
+  ...
+}
+```
+
+Write the Powerwall ID number in the file specified in `cfg_powerwall_id_file`.
+This file is read once when the `tesla_exporter.py` script starts up. If the
+file is not present, the script will not try to obtain Powerwall metrics.
+
