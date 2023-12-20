@@ -72,7 +72,8 @@ import pprint
 
 cfg_port = 9100         # the port our webserver listens on
 cfg_stale_thres = 90    # treat metrics as stale if older than this (secs)
-cfg_check_interval = 45 # how often we'll try check for new metrics
+cfg_check_interval = 50 # how often we'll try check for new metrics
+cfg_drive_interval = 25 # how often we poll when the car is in "drive"
 cfg_api_retries = 3     # how many times we call tesla APIs before giving up
 cfg_retry_sleep = 5     # pause this number of seconds between retries
 
@@ -501,6 +502,10 @@ G_last_load = f_get_file_age (cfg_vehicle_data_file)
 
 cycle_start = time.time()
 
+# The current polling frequency
+
+poll_freq = cfg_check_interval
+
 # program main loop
 
 while 1:
@@ -551,6 +556,16 @@ while 1:
         G_metrics_cur = G_metrics_new
         G_last_load = age
 
+        # if vehicle's "shift_state" is "D", we'll want to poll vehicle
+        # metrics more frequently.
+
+        poll_freq = cfg_check_interval
+        if ("drive_state" in obj["response"]) and \
+           ("shift_state" in obj["response"]["drive_state"]) and \
+           (obj["response"]["drive_state"]["shift_state"] is not None) and \
+           (obj["response"]["drive_state"]["shift_state"] == "D"):
+          poll_freq = cfg_drive_interval
+
   # if vehicle JSON file is stale, then "G_metrics_cur" is stale too
 
   if (G_metrics_cur is not None) and (time.time() - age > cfg_stale_thres):
@@ -560,7 +575,7 @@ while 1:
   # calculate how long we'll sleep
 
   tv_end = time.time()
-  cycle_start = cycle_start + cfg_check_interval
+  cycle_start = cycle_start + poll_freq
   duration = cycle_start - tv_end
   if (duration > 0):
     print("NOTICE: cycle ended at %.3f, sleeping for %.3f secs." %
