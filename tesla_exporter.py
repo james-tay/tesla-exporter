@@ -95,6 +95,9 @@ cfg_refresh_token_file = "/data/token.refresh"
 # The JSON file where we store vehicle raw data
 cfg_vehicle_data_file = "/data/vehicle.data"
 
+# The JSON file where we store vehicle location data
+cfg_vehicle_location_file = "/data/vehicle.location"
+
 G_metrics_cur = None    # metrics we expose on our web server
 G_metrics_new = None    # metrics we accumulate while iterating through JSON
 G_last_load = 0         # epoch time that we last loaded fresh JSON data
@@ -342,7 +345,7 @@ def f_wake_vehicle(id):
     hdrs["Authorization"] = "Bearer %s" % f_get_token(cfg_access_token_file)
     url = "%s/api/1/vehicles/%d/wake_up" % (cfg_tesla_owner_url, id)
 
-    print("NOTICE: Waking vehicle %d" % id)
+    print("NOTICE: waking vehicle %d" % id)
     req = urllib.request.Request(url, data=None, headers=hdrs, method="POST")
     resp = None
     try:
@@ -365,9 +368,9 @@ def f_wake_vehicle(id):
           ("response" in obj) and
           (obj["response"] is not None) and
           ("state" in obj["response"]) and
-          ("display_name" in obj["response"])):
+          ("vin" in obj["response"])):
         print("NOTICE: wakeup sent to %s(%s)" % \
-              (obj["response"]["display_name"],
+              (obj["response"]["vin"],
                obj["response"]["state"]))
       else:
         print("WARNING: unexpected response - %s" % payload)
@@ -410,7 +413,7 @@ def f_get_vehicle_data(id):
       resp = urllib.request.urlopen(req)
     except:
       e = sys.exc_info()
-      print("NOTICE: %s failed - %s" % (url, e[1]))
+      print("WARNING: %s failed - %s" % (url, e[1]))
 
     if (resp is None):                  # try to refresh our access token
       f_update_access_token()
@@ -422,11 +425,45 @@ def f_get_vehicle_data(id):
       except:
         e = sys.exc_info()
         print("WARNING: No JSON response from %s - %s" % (url, e[1]))
-      if ((obj is not None) and
-          ("response" in obj)):
+      if ((obj is not None) and ("response" in obj)):
         f_save_data(cfg_vehicle_data_file, str(payload, "UTF-8"))
       return
     time.sleep(cfg_retry_sleep)
+
+# This function pulls vehicle location data since Tesla removed this from
+# the plain "vehicle_data" endpoint sometime on 18th oct 2023. This function
+# should be called AFTER f_get_vehicle_data() as it won't try updating our
+# token or attempt a retry.
+
+def f_get_vehicle_location(id):
+  hdrs = {}
+  hdrs["Content-Type"] = "application/json"
+  hdrs["Authorization"] = "Bearer %s" % f_get_token(cfg_access_token_file)
+  url = "%s/api/1/vehicles/%d/vehicle_data?endpoints=location_data" % \
+        (cfg_tesla_owner_url, id)
+
+  print("NOTICE: Getting vehicle location - %s" % url)
+  req = urllib.request.Request(url, data=None, headers=hdrs)
+  resp = None
+  try:
+    resp = urllib.request.urlopen(req)
+  except:
+    e = sys.exc_info()
+    print("WARNING: %s failed - %s" % (url, e[1]))
+  if (resp is None):
+    print("WARNING: %s empty response" % url)
+    return
+
+  payload = resp.read()
+  obj = None
+  try:
+    obj = json.loads(payload)
+  except:
+    e = sys.exc_info()
+    print("WARNING: No JSON response from %s - %s" % (url, e[1]))
+
+  if ((obj is not None) and ("response" in obj)):
+    f_save_data(cfg_vehicle_location_file, str(payload, "UTF-8"))
 
 # -----------------------------------------------------------------------------
 
@@ -522,6 +559,7 @@ while 1:
   if (vehicle is not None) and (vehicle["state"] == "online"):
     G_last_online = now
     f_get_vehicle_data(vehicle["id"])
+    f_get_vehicle_location(vehicle["id"])
   else:
 
     # if the vehicle is not online, and it's been quite a while, wake it.
@@ -550,9 +588,21 @@ while 1:
 
       G_metrics_new = {}
       f_iterate(obj["response"], cfg_metrics_prefix)
+
+      # now try to merge in vehicle location data
+
+      loc = f_load_json(cfg_vehicle_location_file)
+      if ((loc is not None) and
+          ("response" in loc) and
+          (loc["response"] is not None) and
+          ("drive_state" in loc["response"]) and
+          (loc["response"]["drive_state"] is not None)):
+        f_iterate(loc["response"]["drive_state"], 
+                  "%s_drive_state" % cfg_metrics_prefix)
+
       if (len(G_metrics_new.keys()) > 1):
-        print("NOTICE: metrics loaded with age %.3fsecs." % \
-              (time.time() - age))
+        print("NOTICE: %d metrics loaded with age %.3fsecs." % \
+              (len(G_metrics_new.keys()), time.time() - age))
         G_metrics_cur = G_metrics_new
         G_last_load = age
 
