@@ -72,8 +72,8 @@ import pprint
 
 cfg_port = 9100         # the port our webserver listens on
 cfg_stale_thres = 90    # treat metrics as stale if older than this (secs)
-cfg_check_interval = 50 # how often we'll try check for new metrics
-cfg_drive_interval = 25 # how often we poll when the car is in "drive"
+cfg_check_interval = 70 # how often we'll try check for new metrics
+cfg_drive_interval = 65 # how often we poll when the car is in "drive"
 cfg_api_retries = 3     # how many times we call tesla APIs before giving up
 cfg_retry_sleep = 5     # pause this number of seconds between retries
 
@@ -84,7 +84,7 @@ cfg_tesla_auth_url = "https://auth.tesla.com"
 cfg_metrics_prefix="tesla"
 
 # If the car goes asleep (or offline), how long (secs) before we wake it.
-cfg_sleep_allowed = 60 * 60
+cfg_sleep_allowed = 60 * 60 * 3
 
 # The file which contains the access token (periodically refreshed)
 cfg_access_token_file = "/data/token.access"
@@ -268,16 +268,23 @@ def f_update_access_token():
       f_save_data(cfg_access_token_file, obj["access_token"])
       f_save_data(cfg_refresh_token_file, obj["refresh_token"])
 
-# This function calls the tesla API's "/vehicles" endpoint, which is expected
+# This function calls the tesla API's "/products" endpoint, which is expected
 # to return JSON like,
 #
-#   {'count': 1,
-#    'response': [{'access_type': 'OWNER',
-#                  'api_version': 54,
-#                   ...
-#                   'id': 3744405482650726,
-#                   'state': 'offline',
-#                   ...
+# {
+#    "count": 2,
+#    "response": [
+#      {
+#        "id": 3744405482650726,
+#        "state": "asleep",
+#        ...
+#      },
+#      {
+#        "energy_site_id": 2252275849535070,
+#        ...
+#      }
+#    ]
+#  }
 #
 # On success, it returns a hash which provides basic vehicle information. If
 # something didn't work out, it returns None.
@@ -294,9 +301,9 @@ def f_get_vehicle_id():
     hdrs = {}
     hdrs["Content-Type"] = "application/json"
     hdrs["Authorization"] = "Bearer %s" % access_token
-    url = "%s/api/1/vehicles" % cfg_tesla_owner_url
+    url = "%s/api/1/products" % cfg_tesla_owner_url
 
-    print("NOTICE: Listing vehicles - %s" % url)
+    print("NOTICE: Listing products - %s" % url)
     req = urllib.request.Request(url, data=None, headers=hdrs)
     resp = None
     try:
@@ -317,16 +324,18 @@ def f_get_vehicle_id():
         print("WARNING: No JSON response from %s - %s" % (url, e[1]))
       if ((obj is not None) and
           ("count" in obj) and
-          (obj["count"] == 1) and
+          (obj["count"] > 0) and
           ("response" in obj) and
           (obj["response"] is not None) and
-          (len(obj["response"]) == 1) and
-          ("id" in obj["response"][0]) and
-          ("state" in obj["response"][0]) and
-          (obj["response"][0]["state"] is not None)):
-        x = {}
-        x["id"] = obj["response"][0]["id"]
-        x["state"] = obj["response"][0]["state"]
+          (len(obj["response"]) > 0)):
+        for p in obj["response"]:
+          if ((p is not None) and
+              ("vin" in p) and
+              ("id" in p) and
+              ("state" in p)):
+            x = {}
+            x["id"] = p["id"]
+            x["state"] = p["state"]
         print("NOTICE: found vehicle id %d (%s)" % (x["id"], x["state"]))
         return(x)
     time.sleep(cfg_retry_sleep)
